@@ -25,7 +25,8 @@ from rich.rule import Rule
 
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
-from cli.models import AnalystType
+from tradingagents.summary_report import generate_summary_report, get_report_filename
+from cli.models import AnalystType, Language
 from cli.utils import *
 from cli.announcements import fetch_announcements, display_announcements
 from cli.stats_handler import StatsCallbackHandler
@@ -592,6 +593,14 @@ def get_user_selections():
         )
         anthropic_effort = ask_anthropic_effort()
 
+    # Step 8: Response Language
+    console.print(
+        create_question_box(
+            "Step 8: Response Language", "Select the language for agent responses"
+        )
+    )
+    selected_language = select_language()
+
     return {
         "ticker": selected_ticker,
         "analysis_date": analysis_date,
@@ -605,6 +614,7 @@ def get_user_selections():
         "google_thinking_level": thinking_level,
         "openai_reasoning_effort": reasoning_effort,
         "anthropic_effort": anthropic_effort,
+        "language": selected_language.value,
     }
 
 
@@ -632,8 +642,18 @@ def get_analysis_date():
             )
 
 
-def save_report_to_disk(final_state, ticker: str, save_path: Path):
-    """Save complete analysis report to disk with organized subfolders."""
+def save_report_to_disk(
+    final_state, ticker: str, save_path: Path, language: str = "English", llm=None
+):
+    """Save complete analysis report to disk with organized subfolders.
+
+    Args:
+        final_state: The final state containing all analysis results
+        ticker: The ticker symbol
+        save_path: Path to save the reports
+        language: Target language for summary report (default: "English")
+        llm: LLM instance for generating summary report (required if language != "English")
+    """
     save_path.mkdir(parents=True, exist_ok=True)
     sections = []
 
@@ -729,6 +749,18 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
     # Write consolidated report
     header = f"# Trading Analysis Report: {ticker}\n\nGenerated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
     (save_path / "complete_report.md").write_text(header + "\n\n".join(sections))
+
+    if language != "English" and llm is not None:
+        console.print(f"\n[cyan]Generating summary report in {language}...[/cyan]")
+        try:
+            summary_report = generate_summary_report(final_state, language, llm)
+            summary_filename = get_report_filename(language)
+            (save_path / summary_filename).write_text(summary_report)
+        except Exception as e:
+            console.print(
+                f"[yellow]Warning: Could not generate summary report in {language}: {e}[/yellow]"
+            )
+
     return save_path / "complete_report.md"
 
 
@@ -993,6 +1025,7 @@ def run_analysis():
     config["deep_think_llm"] = selections["deep_thinker"]
     config["backend_url"] = selections["backend_url"]
     config["llm_provider"] = selections["llm_provider"].lower()
+    config["language"] = selections["language"]
     # Provider-specific thinking configuration
     config["google_thinking_level"] = selections.get("google_thinking_level")
     config["openai_reasoning_effort"] = selections.get("openai_reasoning_effort")
@@ -1302,11 +1335,21 @@ def run_analysis():
         ).strip()
         save_path = Path(save_path_str)
         try:
+            language = selections.get("language", "English")
             report_file = save_report_to_disk(
-                final_state, selections["ticker"], save_path
+                final_state,
+                selections["ticker"],
+                save_path,
+                language=language,
+                llm=graph.quick_thinking_llm,
             )
             console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
             console.print(f"  [dim]Complete report:[/dim] {report_file.name}")
+            if language != "English":
+                from tradingagents.summary_report import get_report_filename
+
+                summary_filename = get_report_filename(language)
+                console.print(f"  [dim]Summary ({language}):[/dim] {summary_filename}")
         except Exception as e:
             console.print(f"[red]Error saving report: {e}[/red]")
 

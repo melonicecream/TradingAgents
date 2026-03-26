@@ -8,3 +8,11 @@ class AnalystType(str, Enum):
     SOCIAL = "social"
     NEWS = "news"
     FUNDAMENTALS = "fundamentals"
+
+
+class Language(str, Enum):
+    ENGLISH = "English"
+    KOREAN = "한국어"
+    JAPANESE = "日本語"
+    CHINESE = "中文"
+    SPANISH = "Español"

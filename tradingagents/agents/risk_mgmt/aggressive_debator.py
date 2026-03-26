@@ -8,7 +8,9 @@ def create_aggressive_debator(llm):
         history = risk_debate_state.get("history", "")
         aggressive_history = risk_debate_state.get("aggressive_history", "")
 
-        current_conservative_response = risk_debate_state.get("current_conservative_response", "")
+        current_conservative_response = risk_debate_state.get(
+            "current_conservative_response", ""
+        )
         current_neutral_response = risk_debate_state.get("current_neutral_response", "")
 
         market_research_report = state["market_report"]
@@ -43,7 +45,9 @@ Engage actively by addressing any specific concerns raised, refuting the weaknes
             "neutral_history": risk_debate_state.get("neutral_history", ""),
             "latest_speaker": "Aggressive",
             "current_aggressive_response": argument,
-            "current_conservative_response": risk_debate_state.get("current_conservative_response", ""),
+            "current_conservative_response": risk_debate_state.get(
+                "current_conservative_response", ""
+            ),
             "current_neutral_response": risk_debate_state.get(
                 "current_neutral_response", ""
             ),

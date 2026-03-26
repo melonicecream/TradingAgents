@@ -7,6 +7,7 @@ DEFAULT_CONFIG = {
         os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
         "dataflows/data_cache",
     ),
+    "language": os.getenv("TRADINGAGENTS_LANGUAGE", "English"),
     # LLM settings
     "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
     "deep_think_llm": os.getenv("DEEP_THINK_LLM", "gpt-5.2"),

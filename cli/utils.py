@@ -6,7 +6,7 @@ import requests
 
 from rich.console import Console
 
-from cli.models import AnalystType
+from cli.models import AnalystType, Language
 
 console = Console()
 
@@ -17,6 +17,14 @@ ANALYST_ORDER = [
     ("Social Media Analyst", AnalystType.SOCIAL),
     ("News Analyst", AnalystType.NEWS),
     ("Fundamentals Analyst", AnalystType.FUNDAMENTALS),
+]
+
+LANGUAGE_ORDER = [
+    ("English", Language.ENGLISH),
+    ("한국어 (Korean)", Language.KOREAN),
+    ("日本語 (Japanese)", Language.JAPANESE),
+    ("中文(Chinese)", Language.CHINESE),
+    ("Español (Spanish)", Language.SPANISH),
 ]
 
 OPENROUTER_MODELS_CACHE: Optional[List[Tuple[str, str]]] = None
@@ -222,6 +230,32 @@ def select_research_depth() -> int:
 
     if choice is None:
         console.print("\n[red]No research depth selected. Exiting...[/red]")
+        exit(1)
+
+    return choice
+
+
+def select_language() -> Language:
+    """Select response language using an interactive selection."""
+
+    choice = questionary.select(
+        "Select Your [Response Language]:",
+        choices=[
+            questionary.Choice(display, value=value)
+            for display, value in LANGUAGE_ORDER
+        ],
+        instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
+        style=questionary.Style(
+            [
+                ("selected", "fg:cyan noinherit"),
+                ("highlighted", "fg:cyan noinherit"),
+                ("pointer", "fg:cyan noinherit"),
+            ]
+        ),
+    ).ask()
+
+    if choice is None:
+        console.print("\n[red]No language selected. Exiting...[/red]")
         exit(1)
 
     return choice
