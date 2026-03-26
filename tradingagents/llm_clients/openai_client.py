@@ -18,10 +18,16 @@ class NormalizedChatOpenAI(ChatOpenAI):
     def invoke(self, input, config=None, **kwargs):
         return normalize_content(super().invoke(input, config, **kwargs))
 
+
 # Kwargs forwarded from user config to ChatOpenAI
 _PASSTHROUGH_KWARGS = (
-    "timeout", "max_retries", "reasoning_effort",
-    "api_key", "callbacks", "http_client", "http_async_client",
+    "timeout",
+    "max_retries",
+    "reasoning_effort",
+    "api_key",
+    "callbacks",
+    "http_client",
+    "http_async_client",
 )
 
 # Provider base URLs and API key env vars
@@ -75,8 +81,10 @@ class OpenAIClient(BaseLLMClient):
 
         # Native OpenAI: use Responses API for consistent behavior across
         # all model families. Third-party providers use Chat Completions.
+        # However, custom base URLs (e.g., OpenCode proxy) may not support
+        # Responses API, so disable it when custom base_url is provided.
         if self.provider == "openai":
-            llm_kwargs["use_responses_api"] = True
+            llm_kwargs["use_responses_api"] = not bool(self.base_url)
 
         return NormalizedChatOpenAI(**llm_kwargs)
 

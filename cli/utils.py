@@ -1,5 +1,8 @@
+import os
+from typing import List, Optional, Tuple
+
 import questionary
-from typing import List, Optional, Tuple, Dict
+import requests
 
 from rich.console import Console
 
@@ -15,6 +18,97 @@ ANALYST_ORDER = [
     ("News Analyst", AnalystType.NEWS),
     ("Fundamentals Analyst", AnalystType.FUNDAMENTALS),
 ]
+
+OPENROUTER_MODELS_CACHE: Optional[List[Tuple[str, str]]] = None
+CUSTOM_MODEL_CHOICE_VALUE = "__custom_model__"
+CUSTOM_PROVIDER_CHOICE_VALUE = "__custom_provider__"
+CUSTOM_PROTOCOL_OPTIONS = [
+    ("OpenAI-compatible", "openai"),
+    ("Anthropic-compatible", "anthropic"),
+]
+CUSTOM_API_KEY_ENV_VARS = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
+
+DEFAULT_OPENROUTER_MODELS = [
+    ("StepFun: Step 3.5 Flash (free)", "stepfun/step-3.5-flash:free"),
+    ("NVIDIA: Nemotron 3 Super (free)", "nvidia/nemotron-3-super-120b-a12b:free"),
+    ("Z.ai: GLM 4.5 Air (free)", "z-ai/glm-4.5-air:free"),
+    ("NVIDIA: Nemotron 3 Nano 30B (free)", "nvidia/nemotron-3-nano-30b-a3b:free"),
+    ("Meta: Llama 3.3 70B Instruct (free)", "meta-llama/llama-3.3-70b-instruct:free"),
+]
+
+
+def fetch_openrouter_free_models(max_models: int = 10) -> List[Tuple[str, str]]:
+    """Fetch free models from OpenRouter API, sorted by popularity.
+
+    Args:
+        max_models: Maximum number of models to return
+
+    Returns:
+        List of (display_name, slug) tuples
+    """
+    global OPENROUTER_MODELS_CACHE
+
+    if OPENROUTER_MODELS_CACHE is not None:
+        return OPENROUTER_MODELS_CACHE[:max_models]
+
+    try:
+        url = "https://openrouter.ai/api/frontend/models/find?max_price=0&order=most-popular"
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+
+        models = []
+        for m in data.get("data", {}).get("models", [])[:max_models]:
+            slug = m.get("slug", "")
+            name = m.get("name", "")
+            if slug and name:
+                slug_with_free = f"{slug}:free"
+                display_name = name.replace(" (free)", "").strip()
+                models.append((display_name, slug_with_free))
+
+        if models:
+            OPENROUTER_MODELS_CACHE = models
+            return models
+
+    except Exception as e:
+        console.print(
+            f"[yellow]Warning: Could not fetch OpenRouter models: {e}[/yellow]"
+        )
+        console.print("[yellow]Using default model list instead.[/yellow]")
+
+    return DEFAULT_OPENROUTER_MODELS[:max_models]
+
+
+def prompt_custom_model(default_model: str = "") -> str:
+    """Prompt for a custom model identifier."""
+    custom_model = questionary.text(
+        "Enter custom model name:",
+        default=default_model,
+    ).ask()
+
+    if not custom_model or not custom_model.strip():
+        console.print("\n[red]Custom model name is required. Exiting...[/red]")
+        exit(1)
+
+    return custom_model.strip()
+
+
+def set_custom_api_key_environment(provider: str, api_key: Optional[str]) -> None:
+    """Set the provider-specific API key env var for a custom endpoint."""
+    if not api_key:
+        return
+
+    env_var = CUSTOM_API_KEY_ENV_VARS.get(provider.lower())
+    if not env_var:
+        raise ValueError(
+            "Custom API keys are only supported for OpenAI-compatible or "
+            "Anthropic-compatible custom endpoints."
+        )
+
+    os.environ[env_var] = api_key
 
 
 def get_ticker() -> str:
@@ -133,12 +227,12 @@ def select_research_depth() -> int:
     return choice
 
 
-def select_shallow_thinking_agent(provider) -> str:
-    """Select shallow thinking llm engine using an interactive selection."""
+def select_shallow_thinking_agent(provider: str) -> str:
+    """Select shallow thinking llm engine using an interactive selection.
 
-    # Define shallow thinking llm engine options with their corresponding model names
-    # Ordering: medium → light → heavy (balanced first for quick tasks)
-    # Within same tier, newer models first
+    Uses QUICK_THINK_LLM from .env as custom default if set.
+    """
+
     SHALLOW_AGENT_OPTIONS = {
         "openai": [
             ("GPT-5 Mini - Balanced speed, cost, and capability", "gpt-5-mini"),
@@ -147,38 +241,64 @@ def select_shallow_thinking_agent(provider) -> str:
             ("GPT-4.1 - Smartest non-reasoning model", "gpt-4.1"),
         ],
         "anthropic": [
-            ("Claude Sonnet 4.6 - Best speed and intelligence balance", "claude-sonnet-4-6"),
+            (
+                "Claude Sonnet 4.6 - Best speed and intelligence balance",
+                "claude-sonnet-4-6",
+            ),
             ("Claude Haiku 4.5 - Fast, near-instant responses", "claude-haiku-4-5"),
             ("Claude Sonnet 4.5 - Agents and coding", "claude-sonnet-4-5"),
         ],
         "google": [
             ("Gemini 3 Flash - Next-gen fast", "gemini-3-flash-preview"),
             ("Gemini 2.5 Flash - Balanced, stable", "gemini-2.5-flash"),
-            ("Gemini 3.1 Flash Lite - Most cost-efficient", "gemini-3.1-flash-lite-preview"),
+            (
+                "Gemini 3.1 Flash Lite - Most cost-efficient",
+                "gemini-3.1-flash-lite-preview",
+            ),
             ("Gemini 2.5 Flash Lite - Fast, low-cost", "gemini-2.5-flash-lite"),
         ],
         "xai": [
-            ("Grok 4.1 Fast (Non-Reasoning) - Speed optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
-            ("Grok 4 Fast (Non-Reasoning) - Speed optimized", "grok-4-fast-non-reasoning"),
-            ("Grok 4.1 Fast (Reasoning) - High-performance, 2M ctx", "grok-4-1-fast-reasoning"),
+            (
+                "Grok 4.1 Fast (Non-Reasoning) - Speed optimized, 2M ctx",
+                "grok-4-1-fast-non-reasoning",
+            ),
+            (
+                "Grok 4 Fast (Non-Reasoning) - Speed optimized",
+                "grok-4-fast-non-reasoning",
+            ),
+            (
+                "Grok 4.1 Fast (Reasoning) - High-performance, 2M ctx",
+                "grok-4-1-fast-reasoning",
+            ),
         ],
-        "openrouter": [
-            ("NVIDIA Nemotron 3 Nano 30B (free)", "nvidia/nemotron-3-nano-30b-a3b:free"),
-            ("Z.AI GLM 4.5 Air (free)", "z-ai/glm-4.5-air:free"),
-        ],
+        "openrouter": [],
         "ollama": [
             ("Qwen3:latest (8B, local)", "qwen3:latest"),
             ("GPT-OSS:latest (20B, local)", "gpt-oss:latest"),
             ("GLM-4.7-Flash:latest (30B, local)", "glm-4.7-flash:latest"),
         ],
+        "custom": [],
     }
+
+    env_model = os.getenv("QUICK_THINK_LLM", "")
+
+    custom_label = f"Custom Model: {env_model}" if env_model else "Custom Model..."
+    choices = [
+        questionary.Choice(custom_label, value=CUSTOM_MODEL_CHOICE_VALUE),
+    ]
+
+    if provider.lower() == "openrouter":
+        provider_options = fetch_openrouter_free_models()
+    else:
+        provider_options = SHALLOW_AGENT_OPTIONS.get(
+            provider.lower(), SHALLOW_AGENT_OPTIONS["anthropic"]
+        )
+    for display, value in provider_options:
+        choices.append(questionary.Choice(display, value=value))
 
     choice = questionary.select(
         "Select Your [Quick-Thinking LLM Engine]:",
-        choices=[
-            questionary.Choice(display, value=value)
-            for display, value in SHALLOW_AGENT_OPTIONS[provider.lower()]
-        ],
+        choices=choices,
         instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
         style=questionary.Style(
             [
@@ -195,57 +315,89 @@ def select_shallow_thinking_agent(provider) -> str:
         )
         exit(1)
 
+    if choice == CUSTOM_MODEL_CHOICE_VALUE:
+        return prompt_custom_model(env_model)
+
     return choice
 
 
-def select_deep_thinking_agent(provider) -> str:
-    """Select deep thinking llm engine using an interactive selection."""
+def select_deep_thinking_agent(provider: str) -> str:
+    """Select deep thinking llm engine using an interactive selection.
 
-    # Define deep thinking llm engine options with their corresponding model names
-    # Ordering: heavy → medium → light (most capable first for deep tasks)
-    # Within same tier, newer models first
+    Uses DEEP_THINK_LLM from .env as custom default if set.
+    """
+
     DEEP_AGENT_OPTIONS = {
         "openai": [
             ("GPT-5.4 - Latest frontier, 1M context", "gpt-5.4"),
             ("GPT-5.2 - Strong reasoning, cost-effective", "gpt-5.2"),
             ("GPT-5 Mini - Balanced speed, cost, and capability", "gpt-5-mini"),
-            ("GPT-5.4 Pro - Most capable, expensive ($30/$180 per 1M tokens)", "gpt-5.4-pro"),
+            (
+                "GPT-5.4 Pro - Most capable, expensive ($30/$180 per 1M tokens)",
+                "gpt-5.4-pro",
+            ),
         ],
         "anthropic": [
-            ("Claude Opus 4.6 - Most intelligent, agents and coding", "claude-opus-4-6"),
+            (
+                "Claude Opus 4.6 - Most intelligent, agents and coding",
+                "claude-opus-4-6",
+            ),
             ("Claude Opus 4.5 - Premium, max intelligence", "claude-opus-4-5"),
-            ("Claude Sonnet 4.6 - Best speed and intelligence balance", "claude-sonnet-4-6"),
+            (
+                "Claude Sonnet 4.6 - Best speed and intelligence balance",
+                "claude-sonnet-4-6",
+            ),
             ("Claude Sonnet 4.5 - Agents and coding", "claude-sonnet-4-5"),
         ],
         "google": [
-            ("Gemini 3.1 Pro - Reasoning-first, complex workflows", "gemini-3.1-pro-preview"),
+            (
+                "Gemini 3.1 Pro - Reasoning-first, complex workflows",
+                "gemini-3.1-pro-preview",
+            ),
             ("Gemini 3 Flash - Next-gen fast", "gemini-3-flash-preview"),
             ("Gemini 2.5 Pro - Stable pro model", "gemini-2.5-pro"),
             ("Gemini 2.5 Flash - Balanced, stable", "gemini-2.5-flash"),
         ],
         "xai": [
             ("Grok 4 - Flagship model", "grok-4-0709"),
-            ("Grok 4.1 Fast (Reasoning) - High-performance, 2M ctx", "grok-4-1-fast-reasoning"),
+            (
+                "Grok 4.1 Fast (Reasoning) - High-performance, 2M ctx",
+                "grok-4-1-fast-reasoning",
+            ),
             ("Grok 4 Fast (Reasoning) - High-performance", "grok-4-fast-reasoning"),
-            ("Grok 4.1 Fast (Non-Reasoning) - Speed optimized, 2M ctx", "grok-4-1-fast-non-reasoning"),
+            (
+                "Grok 4.1 Fast (Non-Reasoning) - Speed optimized, 2M ctx",
+                "grok-4-1-fast-non-reasoning",
+            ),
         ],
-        "openrouter": [
-            ("Z.AI GLM 4.5 Air (free)", "z-ai/glm-4.5-air:free"),
-            ("NVIDIA Nemotron 3 Nano 30B (free)", "nvidia/nemotron-3-nano-30b-a3b:free"),
-        ],
+        "openrouter": [],
         "ollama": [
             ("GLM-4.7-Flash:latest (30B, local)", "glm-4.7-flash:latest"),
             ("GPT-OSS:latest (20B, local)", "gpt-oss:latest"),
             ("Qwen3:latest (8B, local)", "qwen3:latest"),
         ],
+        "custom": [],
     }
+
+    env_model = os.getenv("DEEP_THINK_LLM", "")
+
+    custom_label = f"Custom Model: {env_model}" if env_model else "Custom Model..."
+    choices = [
+        questionary.Choice(custom_label, value=CUSTOM_MODEL_CHOICE_VALUE),
+    ]
+
+    if provider.lower() == "openrouter":
+        provider_options = fetch_openrouter_free_models()
+    else:
+        provider_options = DEEP_AGENT_OPTIONS.get(
+            provider.lower(), DEEP_AGENT_OPTIONS["anthropic"]
+        )
+    for display, value in provider_options:
+        choices.append(questionary.Choice(display, value=value))
 
     choice = questionary.select(
         "Select Your [Deep-Thinking LLM Engine]:",
-        choices=[
-            questionary.Choice(display, value=value)
-            for display, value in DEEP_AGENT_OPTIONS[provider.lower()]
-        ],
+        choices=choices,
         instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
         style=questionary.Style(
             [
@@ -260,26 +412,54 @@ def select_deep_thinking_agent(provider) -> str:
         console.print("\n[red]No deep thinking llm engine selected. Exiting...[/red]")
         exit(1)
 
+    if choice == CUSTOM_MODEL_CHOICE_VALUE:
+        return prompt_custom_model(env_model)
+
     return choice
 
-def select_llm_provider() -> tuple[str, str]:
-    """Select the OpenAI api url using interactive selection."""
-    # Define OpenAI api options with their corresponding endpoints
-    BASE_URLS = [
-        ("OpenAI", "https://api.openai.com/v1"),
-        ("Google", "https://generativelanguage.googleapis.com/v1"),
-        ("Anthropic", "https://api.anthropic.com/"),
-        ("xAI", "https://api.x.ai/v1"),
-        ("Openrouter", "https://openrouter.ai/api/v1"),
-        ("Ollama", "http://localhost:11434/v1"),
+
+def select_llm_provider() -> tuple[str, str, Optional[str]]:
+    """Select the LLM backend using interactive selection.
+
+    Returns:
+        tuple of (provider, base_url, api_key)
+        - For preset providers: api_key is None (uses env-based key)
+        - For custom URL: prompts for custom API key
+
+    Uses BACKEND_URL and CUSTOM_API_KEY from .env as defaults if set.
+    """
+    base_urls = [
+        ("OpenAI", "openai", "https://api.openai.com/v1"),
+        ("Google", "google", "https://generativelanguage.googleapis.com/v1"),
+        ("Anthropic", "anthropic", "https://api.anthropic.com/"),
+        ("xAI", "xai", "https://api.x.ai/v1"),
+        ("Openrouter", "openrouter", "https://openrouter.ai/api/v1"),
+        ("Ollama", "ollama", "http://localhost:11434/v1"),
     ]
-    
+
+    env_backend = os.getenv("BACKEND_URL", "")
+    env_api_key = os.getenv("CUSTOM_API_KEY", "")
+
+    choices = [
+        questionary.Choice(display, value=(provider, value, None))
+        for display, provider, value in base_urls
+    ]
+    custom_label = f"Custom URL... ({env_backend})" if env_backend else "Custom URL..."
+    choices.insert(
+        0,
+        questionary.Choice(
+            custom_label,
+            value=(
+                CUSTOM_PROVIDER_CHOICE_VALUE,
+                env_backend or "https://api.openai.com/v1",
+                env_api_key or None,
+            ),
+        ),
+    )
+
     choice = questionary.select(
-        "Select your LLM Provider:",
-        choices=[
-            questionary.Choice(display, value=(display, value))
-            for display, value in BASE_URLS
-        ],
+        "Select your LLM backend:",
+        choices=choices,
         instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
         style=questionary.Style(
             [
@@ -289,15 +469,54 @@ def select_llm_provider() -> tuple[str, str]:
             ]
         ),
     ).ask()
-    
-    if choice is None:
-        console.print("\n[red]no OpenAI backend selected. Exiting...[/red]")
-        exit(1)
-    
-    display_name, url = choice
-    print(f"You selected: {display_name}\tURL: {url}")
 
-    return display_name, url
+    if choice is None:
+        console.print("\n[red]No LLM backend selected. Exiting...[/red]")
+        exit(1)
+
+    provider, url, api_key = choice
+
+    if provider == CUSTOM_PROVIDER_CHOICE_VALUE:
+        custom_url = questionary.text(
+            "Enter custom backend URL:",
+            default=url,
+        ).ask()
+        if custom_url:
+            url = custom_url
+
+        protocol_choices = [
+            questionary.Choice(display, value=protocol)
+            for display, protocol in CUSTOM_PROTOCOL_OPTIONS
+        ]
+
+        selected_protocol = questionary.select(
+            "Select protocol for custom URL:",
+            choices=protocol_choices,
+            default="openai",
+            style=questionary.Style(
+                [
+                    ("selected", "fg:cyan noinherit"),
+                    ("highlighted", "fg:cyan noinherit"),
+                    ("pointer", "fg:cyan noinherit"),
+                ]
+            ),
+        ).ask()
+
+        if selected_protocol is None:
+            console.print("\n[red]No custom URL protocol selected. Exiting...[/red]")
+            exit(1)
+
+        provider = selected_protocol
+
+        custom_api_key = questionary.text(
+            "Enter custom API key:",
+            default=api_key or "",
+        ).ask()
+        api_key = custom_api_key if custom_api_key else None
+
+    print(f"You selected: {provider}\tURL: {url}")
+
+    return provider, url, api_key
 
 
 def ask_openai_reasoning_effort() -> str:
@@ -310,11 +529,13 @@ def ask_openai_reasoning_effort() -> str:
     return questionary.select(
         "Select Reasoning Effort:",
         choices=choices,
-        style=questionary.Style([
-            ("selected", "fg:cyan noinherit"),
-            ("highlighted", "fg:cyan noinherit"),
-            ("pointer", "fg:cyan noinherit"),
-        ]),
+        style=questionary.Style(
+            [
+                ("selected", "fg:cyan noinherit"),
+                ("highlighted", "fg:cyan noinherit"),
+                ("pointer", "fg:cyan noinherit"),
+            ]
+        ),
     ).ask()
 
 
@@ -330,11 +551,13 @@ def ask_anthropic_effort() -> str | None:
             questionary.Choice("Medium (balanced)", "medium"),
             questionary.Choice("Low (faster, cheaper)", "low"),
         ],
-        style=questionary.Style([
-            ("selected", "fg:cyan noinherit"),
-            ("highlighted", "fg:cyan noinherit"),
-            ("pointer", "fg:cyan noinherit"),
-        ]),
+        style=questionary.Style(
+            [
+                ("selected", "fg:cyan noinherit"),
+                ("highlighted", "fg:cyan noinherit"),
+                ("pointer", "fg:cyan noinherit"),
+            ]
+        ),
     ).ask()
 
 
@@ -350,9 +573,11 @@ def ask_gemini_thinking_config() -> str | None:
             questionary.Choice("Enable Thinking (recommended)", "high"),
             questionary.Choice("Minimal/Disable Thinking", "minimal"),
         ],
-        style=questionary.Style([
-            ("selected", "fg:green noinherit"),
-            ("highlighted", "fg:green noinherit"),
-            ("pointer", "fg:green noinherit"),
-        ]),
+        style=questionary.Style(
+            [
+                ("selected", "fg:green noinherit"),
+                ("highlighted", "fg:green noinherit"),
+                ("pointer", "fg:green noinherit"),
+            ]
+        ),
     ).ask()

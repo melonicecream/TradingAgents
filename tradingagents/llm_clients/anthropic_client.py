@@ -6,8 +6,14 @@ from .base_client import BaseLLMClient, normalize_content
 from .validators import validate_model
 
 _PASSTHROUGH_KWARGS = (
-    "timeout", "max_retries", "api_key", "max_tokens",
-    "callbacks", "http_client", "http_async_client", "effort",
+    "timeout",
+    "max_retries",
+    "api_key",
+    "max_tokens",
+    "callbacks",
+    "http_client",
+    "http_async_client",
+    "effort",
 )
 
 
@@ -32,6 +38,9 @@ class AnthropicClient(BaseLLMClient):
     def get_llm(self) -> Any:
         """Return configured ChatAnthropic instance."""
         llm_kwargs = {"model": self.model}
+
+        if self.base_url:
+            llm_kwargs["base_url"] = self.base_url
 
         for key in _PASSTHROUGH_KWARGS:
             if key in self.kwargs:

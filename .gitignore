@@ -217,3 +217,15 @@ __marimo__/
 
 # Cache
 **/data_cache/
+
+# Local test scripts (may contain hardcoded credentials)
+test_*.py
+!tests/
+!tests/**
+tests/**/__pycache__/
+tests/**/*.pyc
+
+# Output directories
+eval_results/
+reports/
+results/
