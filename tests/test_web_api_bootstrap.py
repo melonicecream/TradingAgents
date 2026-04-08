@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 
-from web_api.db.database import bootstrap_checkpointer, _sqlite_conn_string
+from web_api.db.database import (
+    _checkpointer_conn_string,
+    _sqlite_conn_string,
+    bootstrap_checkpointer,
+)
 from web_api.main import lifespan
 
 
@@ -24,10 +28,11 @@ class WebApiBootstrapTests(unittest.IsolatedAsyncioTestCase):
             db_path = Path(tmpdir) / "nested" / "tradingagents.db"
             database_url = f"sqlite+aiosqlite:///{db_path}"
             fake_checkpointer = SimpleNamespace(setup=AsyncMock())
+            checkpoint_path = db_path.with_name("tradingagents-checkpoints.db")
 
             @asynccontextmanager
             async def fake_from_conn_string(conn_string: str):
-                self.assertEqual(conn_string, str(db_path))
+                self.assertEqual(conn_string, str(checkpoint_path))
                 yield fake_checkpointer
 
             with patch(
@@ -39,6 +44,16 @@ class WebApiBootstrapTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(db_path.parent.exists())
 
             fake_checkpointer.setup.assert_awaited_once()
+
+    async def test_checkpointer_conn_string_uses_separate_sqlite_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "nested" / "tradingagents.db"
+            database_url = f"sqlite+aiosqlite:///{db_path}"
+
+            self.assertEqual(
+                _checkpointer_conn_string(database_url),
+                str(db_path.with_name("tradingagents-checkpoints.db")),
+            )
 
     async def test_lifespan_bootstraps_checkpointer_for_web_api_only(self):
         app = FastAPI()

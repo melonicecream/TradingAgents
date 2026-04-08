@@ -35,6 +35,18 @@ def _ensure_sqlite_parent_dir(database_url: str | None = None) -> Path:
     return sqlite_path
 
 
+def _checkpointer_conn_string(database_url: str | None = None) -> str:
+    sqlite_path = _ensure_sqlite_parent_dir(database_url)
+    if sqlite_path.as_posix() == ":memory:":
+        return sqlite_path.as_posix()
+
+    checkpoint_path = sqlite_path.with_name(
+        f"{sqlite_path.stem}-checkpoints{sqlite_path.suffix}"
+    )
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    return str(checkpoint_path)
+
+
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,
@@ -72,7 +84,7 @@ async def init_db():
 async def bootstrap_checkpointer(
     database_url: str | None = None,
 ) -> AsyncIterator[Any]:
-    sqlite_path = _ensure_sqlite_parent_dir(database_url)
-    async with AsyncSqliteSaver.from_conn_string(str(sqlite_path)) as checkpointer:
+    conn_string = _checkpointer_conn_string(database_url)
+    async with AsyncSqliteSaver.from_conn_string(conn_string) as checkpointer:
         await checkpointer.setup()
         yield checkpointer
