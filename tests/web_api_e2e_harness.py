@@ -60,6 +60,13 @@ class FakeCompiledGraph:
         yield make_final_chunk()
         self._state_call_count = 3
 
+    async def astream(self, input_state: Any, **kwargs: Any):
+        self.stream_calls.append((input_state, kwargs))
+        yield {"market_report": "market ready"}
+        self._state_call_count = 2
+        yield make_final_chunk()
+        self._state_call_count = 3
+
     async def aget_state(self, config: dict[str, Any]) -> SimpleNamespace:
         thread_id = config["configurable"]["thread_id"]
         final_chunk = make_final_chunk()

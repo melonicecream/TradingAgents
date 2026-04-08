@@ -185,7 +185,9 @@ class TradingService:
 
             final_result = None
 
-            for chunk in cast(Any, graph.graph).stream(stream_input, **runtime_args):
+            async for chunk in cast(Any, graph.graph).astream(
+                stream_input, **runtime_args
+            ):
                 if request is not None and await request.is_disconnected():
                     raise asyncio.CancelledError(
                         "Client disconnected during analysis stream."

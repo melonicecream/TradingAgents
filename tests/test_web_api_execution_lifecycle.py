@@ -69,6 +69,13 @@ class FakeCompiledGraph:
         if self.stream_error is not None:
             raise self.stream_error
 
+    async def astream(self, input_state, **kwargs):
+        self.stream_calls.append((input_state, kwargs))
+        for chunk in self.chunks:
+            yield chunk
+        if self.stream_error is not None:
+            raise self.stream_error
+
     async def aget_state(self, config):
         if not self.snapshots:
             return make_snapshot(config["configurable"]["thread_id"], {})
