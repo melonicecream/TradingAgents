@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 from langchain_openai import ChatOpenAI
 
-from .base_client import BaseLLMClient, normalize_content
+from .base_client import BaseLLMClient, invoke_with_incremental_retry, normalize_content
 from .validators import validate_model
 
 
@@ -15,8 +15,15 @@ class NormalizedChatOpenAI(ChatOpenAI):
     downstream handling.
     """
 
-    def invoke(self, input, config=None, **kwargs):
-        return normalize_content(super().invoke(input, config, **kwargs))
+    def invoke(self, input, config=None, **kwargs) -> Any:
+        return normalize_content(
+            invoke_with_incremental_retry(
+                super().invoke,
+                input,
+                config,
+                **kwargs,
+            )
+        )
 
 
 # Kwargs forwarded from user config to ChatOpenAI
@@ -59,7 +66,7 @@ class OpenAIClient(BaseLLMClient):
 
     def get_llm(self) -> Any:
         """Return configured ChatOpenAI instance."""
-        llm_kwargs = {"model": self.model}
+        llm_kwargs: dict[str, Any] = {"model": self.model}
 
         # Provider-specific base URL and auth
         if self.provider in _PROVIDER_CONFIG:

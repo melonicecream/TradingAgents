@@ -2,7 +2,7 @@ from typing import Any, Optional
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from .base_client import BaseLLMClient, normalize_content
+from .base_client import BaseLLMClient, invoke_with_incremental_retry, normalize_content
 from .validators import validate_model
 
 
@@ -13,8 +13,15 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
     This normalizes to string for consistent downstream handling.
     """
 
-    def invoke(self, input, config=None, **kwargs):
-        return normalize_content(super().invoke(input, config, **kwargs))
+    def invoke(self, input, config=None, **kwargs) -> Any:
+        return normalize_content(
+            invoke_with_incremental_retry(
+                super().invoke,
+                input,
+                config,
+                **kwargs,
+            )
+        )
 
 
 class GoogleClient(BaseLLMClient):
@@ -25,9 +32,16 @@ class GoogleClient(BaseLLMClient):
 
     def get_llm(self) -> Any:
         """Return configured ChatGoogleGenerativeAI instance."""
-        llm_kwargs = {"model": self.model}
+        llm_kwargs: dict[str, Any] = {"model": self.model}
 
-        for key in ("timeout", "max_retries", "google_api_key", "callbacks", "http_client", "http_async_client"):
+        for key in (
+            "timeout",
+            "max_retries",
+            "google_api_key",
+            "callbacks",
+            "http_client",
+            "http_async_client",
+        ):
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
 
