@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import json
 from datetime import date
-from typing import Dict, Any, Tuple, List, Optional
+from typing import Dict, Any, Tuple, List, Optional, cast
 
 from langgraph.prebuilt import ToolNode
 
@@ -47,8 +47,10 @@ class TradingAgentsGraph:
         self,
         selected_analysts=["market", "social", "news", "fundamentals"],
         debug=False,
-        config: Dict[str, Any] = None,
+        config: Optional[Dict[str, Any]] = None,
         callbacks: Optional[List] = None,
+        checkpointer: Any | None = None,
+        compile_kwargs: Optional[Dict[str, Any]] = None,
     ):
         """Initialize the trading agents graph and components.
 
@@ -135,7 +137,11 @@ class TradingAgentsGraph:
         self.log_states_dict = {}  # date to full state dict
 
         # Set up the graph
-        self.graph = self.graph_setup.setup_graph(selected_analysts)
+        self.graph = self.graph_setup.setup_graph(
+            selected_analysts,
+            checkpointer=checkpointer,
+            compile_kwargs=compile_kwargs,
+        )
 
     def _get_provider_kwargs(self) -> Dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
@@ -195,7 +201,12 @@ class TradingAgentsGraph:
             ),
         }
 
-    def propagate(self, company_name, trade_date):
+    def propagate(
+        self,
+        company_name,
+        trade_date,
+        runtime_graph_args: Optional[Dict[str, Any]] = None,
+    ):
         """Run the trading agents graph for a company on a specific date."""
 
         self.ticker = company_name
@@ -204,12 +215,12 @@ class TradingAgentsGraph:
         init_agent_state = self.propagator.create_initial_state(
             company_name, trade_date
         )
-        args = self.propagator.get_graph_args()
+        args = self.propagator.get_graph_args(runtime_overrides=runtime_graph_args)
 
         if self.debug:
             # Debug mode with tracing
             trace = []
-            for chunk in self.graph.stream(init_agent_state, **args):
+            for chunk in cast(Any, self.graph).stream(init_agent_state, **args):
                 if len(chunk["messages"]) == 0:
                     pass
                 else:
@@ -219,7 +230,7 @@ class TradingAgentsGraph:
             final_state = trace[-1]
         else:
             # Standard mode without tracing
-            final_state = self.graph.invoke(init_agent_state, **args)
+            final_state = cast(Any, self.graph).invoke(init_agent_state, **args)
 
         # Store current state for reflection
         self.curr_state = final_state

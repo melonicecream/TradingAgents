@@ -1,6 +1,6 @@
 # TradingAgents/graph/setup.py
 
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph, START
 from langgraph.prebuilt import ToolNode
@@ -38,7 +38,10 @@ class GraphSetup:
         self.conditional_logic = conditional_logic
 
     def setup_graph(
-        self, selected_analysts=["market", "social", "news", "fundamentals"]
+        self,
+        selected_analysts=["market", "social", "news", "fundamentals"],
+        checkpointer: Any | None = None,
+        compile_kwargs: Optional[Dict[str, Any]] = None,
     ):
         """Set up and compile the agent workflow graph.
 
@@ -58,9 +61,7 @@ class GraphSetup:
         tool_nodes = {}
 
         if "market" in selected_analysts:
-            analyst_nodes["market"] = create_market_analyst(
-                self.quick_thinking_llm
-            )
+            analyst_nodes["market"] = create_market_analyst(self.quick_thinking_llm)
             delete_nodes["market"] = create_msg_delete()
             tool_nodes["market"] = self.tool_nodes["market"]
 
@@ -72,9 +73,7 @@ class GraphSetup:
             tool_nodes["social"] = self.tool_nodes["social"]
 
         if "news" in selected_analysts:
-            analyst_nodes["news"] = create_news_analyst(
-                self.quick_thinking_llm
-            )
+            analyst_nodes["news"] = create_news_analyst(self.quick_thinking_llm)
             delete_nodes["news"] = create_msg_delete()
             tool_nodes["news"] = self.tool_nodes["news"]
 
@@ -147,7 +146,7 @@ class GraphSetup:
 
             # Connect to next analyst or to Bull Researcher if this is the last analyst
             if i < len(selected_analysts) - 1:
-                next_analyst = f"{selected_analysts[i+1].capitalize()} Analyst"
+                next_analyst = f"{selected_analysts[i + 1].capitalize()} Analyst"
                 workflow.add_edge(current_clear, next_analyst)
             else:
                 workflow.add_edge(current_clear, "Bull Researcher")
@@ -199,4 +198,10 @@ class GraphSetup:
         workflow.add_edge("Portfolio Manager", END)
 
         # Compile and return
+        resolved_compile_kwargs = dict(compile_kwargs or {})
+        if checkpointer is not None:
+            resolved_compile_kwargs["checkpointer"] = checkpointer
+
+        if resolved_compile_kwargs:
+            return workflow.compile(**resolved_compile_kwargs)
         return workflow.compile()
