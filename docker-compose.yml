@@ -1,0 +1,41 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: web_api/Dockerfile
+    env_file:
+      - .env.zen
+    ports:
+      - "8000:8000"
+    environment:
+      - TRADINGAGENTS_LANGUAGE=한국어
+      - TRADINGAGENTS_RESULTS_DIR=/app/results
+    volumes:
+      - ./results:/app/results
+      - ./eval_results:/app/eval_results
+      - ./data:/app/data
+    networks:
+      - tradingagents-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=${API_URL:-http://localhost:8000}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - tradingagents-network
+
+networks:
+  tradingagents-network:
+    driver: bridge
