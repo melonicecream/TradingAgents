@@ -228,20 +228,16 @@ class TradingAgentsGraphTests(unittest.TestCase):
         self.assertEqual(graph._get_provider_kwargs(), {"thinking_level": "high"})
 
         graph.config = {"llm_provider": "openai", "openai_reasoning_effort": "medium"}
-        with patch.dict("os.environ", {"CUSTOM_API_KEY": "custom-openai"}, clear=False):
-            self.assertEqual(
-                graph._get_provider_kwargs(),
-                {"reasoning_effort": "medium", "api_key": "custom-openai"},
-            )
+        self.assertEqual(
+            graph._get_provider_kwargs(),
+            {"reasoning_effort": "medium"},
+        )
 
         graph.config = {"llm_provider": "anthropic", "anthropic_effort": "high"}
-        with patch.dict(
-            "os.environ", {"CUSTOM_API_KEY": "custom-anthropic"}, clear=False
-        ):
-            self.assertEqual(
-                graph._get_provider_kwargs(),
-                {"effort": "high", "api_key": "custom-anthropic"},
-            )
+        self.assertEqual(
+            graph._get_provider_kwargs(),
+            {"effort": "high"},
+        )
 
     def test_init_builds_dependencies_and_passes_callbacks(self):
         fake_deep_client = MagicMock()
@@ -292,7 +288,6 @@ class TradingAgentsGraphTests(unittest.TestCase):
                 "tradingagents.graph.trading_graph.SignalProcessor",
                 return_value=fake_signal_processor,
             ),
-            patch.dict("os.environ", {"CUSTOM_API_KEY": "custom-key"}, clear=False),
         ):
             graph = TradingAgentsGraph(config=config, callbacks=["cb"])
 
@@ -303,7 +298,6 @@ class TradingAgentsGraphTests(unittest.TestCase):
         first_call = mock_create_llm_client.call_args_list[0]
         self.assertEqual(first_call.kwargs["provider"], "openai")
         self.assertEqual(first_call.kwargs["reasoning_effort"], "high")
-        self.assertEqual(first_call.kwargs["api_key"], "custom-key")
         self.assertEqual(first_call.kwargs["callbacks"], ["cb"])
         self.assertEqual(graph.deep_thinking_llm, "deep-llm")
         self.assertEqual(graph.quick_thinking_llm, "quick-llm")
