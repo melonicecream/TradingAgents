@@ -149,6 +149,8 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -217,3 +219,25 @@ __marimo__/
 
 # Cache
 **/data_cache/
+
+# Local test scripts (may contain hardcoded credentials)
+test_*.py
+!tests/
+!tests/**
+tests/**/__pycache__/
+tests/**/*.pyc
+
+# Output directories
+eval_results/
+reports/
+results/
+
+# Local agent metadata and browser artifacts
+.sisyphus/
+.playwright-mcp/
+tradingagents-web-e2e-docs.png
+
+# Frontend build and dependency artifacts
+frontend/.next/
+frontend/node_modules/
+frontend/dist/

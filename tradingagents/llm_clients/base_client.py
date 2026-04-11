@@ -1,6 +1,50 @@
+import logging
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 import warnings
+
+
+logger = logging.getLogger(__name__)
+
+
+_RATE_LIMIT_RETRY_SUBSTRINGS = (
+    "429",
+    "rate limit exceeded",
+    "freeusagelimiterror",
+    "too many requests",
+)
+
+
+def is_retryable_rate_limit_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return any(fragment in message for fragment in _RATE_LIMIT_RETRY_SUBSTRINGS)
+
+
+def invoke_with_incremental_retry(
+    invoke_func,
+    input,
+    config=None,
+    *,
+    max_retries: int = 10,
+    base_delay: float = 1.0,
+    **kwargs,
+) -> Any:
+    for attempt in range(max_retries + 1):
+        try:
+            return invoke_func(input, config=config, **kwargs)
+        except Exception as error:
+            if not is_retryable_rate_limit_error(error) or attempt >= max_retries:
+                raise
+
+            delay = base_delay * (2**attempt)
+            logger.warning(
+                "LLM rate limited, retrying in %.0fs (attempt %s/%s)",
+                delay,
+                attempt + 1,
+                max_retries,
+            )
+            time.sleep(delay)
 
 
 def normalize_content(response):
@@ -14,8 +58,11 @@ def normalize_content(response):
     content = response.content
     if isinstance(content, list):
         texts = [
-            item.get("text", "") if isinstance(item, dict) and item.get("type") == "text"
-            else item if isinstance(item, str) else ""
+            item.get("text", "")
+            if isinstance(item, dict) and item.get("type") == "text"
+            else item
+            if isinstance(item, str)
+            else ""
             for item in content
         ]
         response.content = "\n".join(t for t in texts if t)

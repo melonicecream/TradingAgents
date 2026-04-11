@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 from langchain_openai import ChatOpenAI
 
-from .base_client import BaseLLMClient, normalize_content
+from .base_client import BaseLLMClient, invoke_with_incremental_retry, normalize_content
 from .validators import validate_model
 
 
@@ -15,16 +15,27 @@ class NormalizedChatOpenAI(ChatOpenAI):
     downstream handling.
     """
 
-    def invoke(self, input, config=None, **kwargs):
-        return normalize_content(super().invoke(input, config, **kwargs))
+    def invoke(self, input, config=None, **kwargs) -> Any:
+        return normalize_content(
+            invoke_with_incremental_retry(
+                super().invoke,
+                input,
+                config,
+                **kwargs,
+            )
+        )
 
-# Kwargs forwarded from user config to ChatOpenAI
+
 _PASSTHROUGH_KWARGS = (
-    "timeout", "max_retries", "reasoning_effort",
-    "api_key", "callbacks", "http_client", "http_async_client",
+    "timeout",
+    "max_retries",
+    "reasoning_effort",
+    "api_key",
+    "callbacks",
+    "http_client",
+    "http_async_client",
 )
 
-# Provider base URLs and API key env vars
 _PROVIDER_CONFIG = {
     "xai": ("https://api.x.ai/v1", "XAI_API_KEY"),
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
@@ -33,13 +44,7 @@ _PROVIDER_CONFIG = {
 
 
 class OpenAIClient(BaseLLMClient):
-    """Client for OpenAI, Ollama, OpenRouter, and xAI providers.
-
-    For native OpenAI models, uses the Responses API (/v1/responses) which
-    supports reasoning_effort with function tools across all model families
-    (GPT-4.1, GPT-5). Third-party compatible providers (xAI, OpenRouter,
-    Ollama) use standard Chat Completions.
-    """
+    """Client for OpenAI, Ollama, OpenRouter, and xAI providers."""
 
     def __init__(
         self,
@@ -52,11 +57,9 @@ class OpenAIClient(BaseLLMClient):
         self.provider = provider.lower()
 
     def get_llm(self) -> Any:
-        """Return configured ChatOpenAI instance."""
         self.warn_if_unknown_model()
-        llm_kwargs = {"model": self.model}
+        llm_kwargs: dict[str, Any] = {"model": self.model}
 
-        # Provider-specific base URL and auth
         if self.provider in _PROVIDER_CONFIG:
             base_url, api_key_env = _PROVIDER_CONFIG[self.provider]
             llm_kwargs["base_url"] = base_url
@@ -69,18 +72,14 @@ class OpenAIClient(BaseLLMClient):
         elif self.base_url:
             llm_kwargs["base_url"] = self.base_url
 
-        # Forward user-provided kwargs
         for key in _PASSTHROUGH_KWARGS:
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
 
-        # Native OpenAI: use Responses API for consistent behavior across
-        # all model families. Third-party providers use Chat Completions.
         if self.provider == "openai":
-            llm_kwargs["use_responses_api"] = True
+            llm_kwargs["use_responses_api"] = not bool(self.base_url)
 
         return NormalizedChatOpenAI(**llm_kwargs)
 
     def validate_model(self) -> bool:
-        """Validate model for the provider."""
         return validate_model(self.provider, self.model)

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import json
 from datetime import date
-from typing import Dict, Any, Tuple, List, Optional
+from typing import Dict, Any, Tuple, List, Optional, cast
 
 from langgraph.prebuilt import ToolNode
 
@@ -30,7 +30,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_income_statement,
     get_news,
     get_insider_transactions,
-    get_global_news
+    get_global_news,
 )
 
 from .conditional_logic import ConditionalLogic
@@ -47,8 +47,10 @@ class TradingAgentsGraph:
         self,
         selected_analysts=["market", "social", "news", "fundamentals"],
         debug=False,
-        config: Dict[str, Any] = None,
+        config: Optional[Dict[str, Any]] = None,
         callbacks: Optional[List] = None,
+        checkpointer: Any | None = None,
+        compile_kwargs: Optional[Dict[str, Any]] = None,
     ):
         """Initialize the trading agents graph and components.
 
@@ -93,13 +95,17 @@ class TradingAgentsGraph:
 
         self.deep_thinking_llm = deep_client.get_llm()
         self.quick_thinking_llm = quick_client.get_llm()
-        
+
         # Initialize memories
         self.bull_memory = FinancialSituationMemory("bull_memory", self.config)
         self.bear_memory = FinancialSituationMemory("bear_memory", self.config)
         self.trader_memory = FinancialSituationMemory("trader_memory", self.config)
-        self.invest_judge_memory = FinancialSituationMemory("invest_judge_memory", self.config)
-        self.portfolio_manager_memory = FinancialSituationMemory("portfolio_manager_memory", self.config)
+        self.invest_judge_memory = FinancialSituationMemory(
+            "invest_judge_memory", self.config
+        )
+        self.portfolio_manager_memory = FinancialSituationMemory(
+            "portfolio_manager_memory", self.config
+        )
 
         # Create tool nodes
         self.tool_nodes = self._create_tool_nodes()
@@ -131,7 +137,11 @@ class TradingAgentsGraph:
         self.log_states_dict = {}  # date to full state dict
 
         # Set up the graph
-        self.graph = self.graph_setup.setup_graph(selected_analysts)
+        self.graph = self.graph_setup.setup_graph(
+            selected_analysts,
+            checkpointer=checkpointer,
+            compile_kwargs=compile_kwargs,
+        )
 
     def _get_provider_kwargs(self) -> Dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
@@ -191,7 +201,12 @@ class TradingAgentsGraph:
             ),
         }
 
-    def propagate(self, company_name, trade_date):
+    def propagate(
+        self,
+        company_name,
+        trade_date,
+        runtime_graph_args: Optional[Dict[str, Any]] = None,
+    ):
         """Run the trading agents graph for a company on a specific date."""
 
         self.ticker = company_name
@@ -200,12 +215,12 @@ class TradingAgentsGraph:
         init_agent_state = self.propagator.create_initial_state(
             company_name, trade_date
         )
-        args = self.propagator.get_graph_args()
+        args = self.propagator.get_graph_args(runtime_overrides=runtime_graph_args)
 
         if self.debug:
             # Debug mode with tracing
             trace = []
-            for chunk in self.graph.stream(init_agent_state, **args):
+            for chunk in cast(Any, self.graph).stream(init_agent_state, **args):
                 if len(chunk["messages"]) == 0:
                     pass
                 else:
@@ -215,7 +230,7 @@ class TradingAgentsGraph:
             final_state = trace[-1]
         else:
             # Standard mode without tracing
-            final_state = self.graph.invoke(init_agent_state, **args)
+            final_state = cast(Any, self.graph).invoke(init_agent_state, **args)
 
         # Store current state for reflection
         self.curr_state = final_state
@@ -248,8 +263,12 @@ class TradingAgentsGraph:
             },
             "trader_investment_decision": final_state["trader_investment_plan"],
             "risk_debate_state": {
-                "aggressive_history": final_state["risk_debate_state"]["aggressive_history"],
-                "conservative_history": final_state["risk_debate_state"]["conservative_history"],
+                "aggressive_history": final_state["risk_debate_state"][
+                    "aggressive_history"
+                ],
+                "conservative_history": final_state["risk_debate_state"][
+                    "conservative_history"
+                ],
                 "neutral_history": final_state["risk_debate_state"]["neutral_history"],
                 "history": final_state["risk_debate_state"]["history"],
                 "judge_decision": final_state["risk_debate_state"]["judge_decision"],
