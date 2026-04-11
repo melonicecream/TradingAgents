@@ -1,15 +1,23 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { AnalysisForm } from '@/components/AnalysisForm'
+import { EngineSummaryCard, type EngineInfo } from '@/components/EngineSummaryCard'
 import { ProgressPanel } from '@/components/ProgressPanel'
 import { ResultPanel } from '@/components/ResultPanel'
 import { HistoryPanel } from '@/components/HistoryPanel'
 import { Header } from '@/components/Header'
+import { SystemStatsPanel, type SystemStats } from '@/components/SystemStatsPanel'
 
 interface AnalysisResult {
   type: 'complete'
   decision: string
+  execution_id?: number
+  status?: string
+  thread_id?: string
+  summary_report?: string | null
+  translated_summary?: string | null
+  engine_explanation?: string | null
   reports: {
     market: string
     sentiment: string
@@ -35,42 +43,158 @@ interface ProgressData {
   step: number
   total: number
   progress: number
+  elapsed_seconds?: number
   agent: string | null
+  current_stage: string | null
   agent_status: Record<string, string>
+  milestone_status: Record<string, string>
+  completed_milestones: number
+  total_milestones: number
   reports: Record<string, string>
 }
 
+interface ExecutionDetail {
+  id: number
+  ticker: string
+  analysis_date: string
+  status: string
+  progress: number
+  current_stage?: string | null
+  last_completed_milestone?: string | null
+  current_milestone?: string | null
+  retry_count: number
+  resume_count: number
+  decision?: string | null
+  created_at: string
+  analysts: string[]
+  reports?: Record<string, unknown> | null
+  research?: Record<string, unknown> | null
+  risk?: Record<string, unknown> | null
+  summary_report?: string | null
+  started_at: string
+  updated_at?: string | null
+  elapsed_seconds: number
+}
+
 export default function Home() {
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || ''
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [progress, setProgress] = useState<ProgressData | null>(null)
   const [result, setResult] = useState<AnalysisResult | null>(null)
+  const [engineInfo, setEngineInfo] = useState<EngineInfo | null>(null)
+  const [systemStats, setSystemStats] = useState<SystemStats | null>(null)
+  const [latestExecutionDetail, setLatestExecutionDetail] = useState<ExecutionDetail | null>(null)
+  const [isEngineLoading, setIsEngineLoading] = useState(true)
+  const [isStatsLoading, setIsStatsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const fetchEngineInfo = useCallback(async () => {
+    setIsEngineLoading(true)
+
+    try {
+      const res = await fetch(`${API_URL}/engine`)
+
+      if (!res.ok) {
+        throw new Error('Failed to fetch engine info')
+      }
+
+      const data = (await res.json()) as EngineInfo
+      setEngineInfo(data)
+    } catch (err) {
+      console.error('Failed to fetch engine info:', err)
+    } finally {
+      setIsEngineLoading(false)
+    }
+  }, [API_URL])
+
+  const fetchSystemStats = useCallback(async () => {
+    setIsStatsLoading(true)
+
+    try {
+      const res = await fetch(`${API_URL}/stats`)
+
+      if (!res.ok) {
+        throw new Error('Failed to fetch system stats')
+      }
+
+      const data = (await res.json()) as SystemStats
+      setSystemStats(data)
+    } catch (err) {
+      console.error('Failed to fetch system stats:', err)
+    } finally {
+      setIsStatsLoading(false)
+    }
+  }, [API_URL])
+
+  const fetchExecutionDetail = useCallback(
+    async (executionId: number) => {
+      try {
+        const res = await fetch(`${API_URL}/executions/${executionId}`)
+
+        if (!res.ok) {
+          throw new Error('Failed to fetch execution detail')
+        }
+
+        const data = (await res.json()) as ExecutionDetail
+        setLatestExecutionDetail(data)
+      } catch (err) {
+        console.error('Failed to fetch execution detail:', err)
+      }
+    },
+    [API_URL]
+  )
+
+  useEffect(() => {
+    void fetchEngineInfo()
+    void fetchSystemStats()
+  }, [fetchEngineInfo, fetchSystemStats])
+
+  useEffect(() => {
+    if (!isAnalyzing) {
+      return
+    }
+
+    const intervalId = window.setInterval(() => {
+      void fetchSystemStats()
+    }, 3000)
+
+    return () => {
+      window.clearInterval(intervalId)
+    }
+  }, [fetchSystemStats, isAnalyzing])
 
   const startAnalysis = async (ticker: string, date: string, analysts: string[]) => {
     setIsAnalyzing(true)
     setProgress(null)
     setResult(null)
+    setLatestExecutionDetail(null)
     setError(null)
+    void fetchSystemStats()
 
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || ''
       const eventSource = new EventSource(
         `${API_URL}/analyze/${encodeURIComponent(ticker)}?date=${date}&analysts=${analysts.join(',')}`
       )
 
       eventSource.onmessage = (event) => {
-        const data = JSON.parse(event.data)
-        
+        const data = JSON.parse(event.data) as AnalysisResult | { type: 'progress' } | { type: 'error'; message?: string }
+
         if (data.type === 'progress') {
-          setProgress(data)
+          setProgress(data as ProgressData)
         } else if (data.type === 'complete') {
           setResult(data)
           setIsAnalyzing(false)
           eventSource.close()
+          void fetchSystemStats()
+
+          if (typeof data.execution_id === 'number') {
+            void fetchExecutionDetail(data.execution_id)
+          }
         } else if (data.type === 'error') {
-          setError(data.message)
+          setError(data.message || '분석 중 오류가 발생했습니다.')
           setIsAnalyzing(false)
           eventSource.close()
+          void fetchSystemStats()
         }
       }
 
@@ -78,17 +202,19 @@ export default function Home() {
         setError('서버 연결 오류가 발생했습니다.')
         setIsAnalyzing(false)
         eventSource.close()
+        void fetchSystemStats()
       }
     } catch (err) {
       setError('분석 시작 중 오류가 발생했습니다.')
       setIsAnalyzing(false)
+      void fetchSystemStats()
     }
   }
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
       <Header />
-      
+
       <div className="container mx-auto px-4 py-8 max-w-6xl">
         <div className="mb-8 text-center">
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
@@ -101,14 +227,24 @@ export default function Home() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-1">
-            <AnalysisForm 
+          <div className="lg:col-span-1 space-y-6">
+            <AnalysisForm
               onSubmit={startAnalysis}
               isLoading={isAnalyzing}
+            />
+
+            <EngineSummaryCard
+              engineInfo={engineInfo}
+              isLoading={isEngineLoading}
             />
           </div>
 
           <div className="lg:col-span-2 space-y-6">
+            <SystemStatsPanel
+              stats={systemStats}
+              isLoading={isStatsLoading}
+            />
+
             {isAnalyzing && progress && (
               <ProgressPanel progress={progress} />
             )}
@@ -120,7 +256,11 @@ export default function Home() {
             )}
 
             {result && (
-              <ResultPanel result={result} />
+              <ResultPanel
+                result={result}
+                engineInfo={engineInfo}
+                executionDetail={latestExecutionDetail}
+              />
             )}
 
             {!isAnalyzing && !result && !error && (
@@ -139,7 +279,7 @@ export default function Home() {
               </div>
             )}
 
-            <HistoryPanel />
+            <HistoryPanel isAnalyzing={isAnalyzing} />
           </div>
         </div>
       </div>
