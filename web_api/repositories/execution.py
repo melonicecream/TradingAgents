@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 from typing import Any, Optional, Sequence, cast
 
-from sqlalchemy import and_, desc, or_, select, update
+from sqlalchemy import and_, desc, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from web_api.db.models import AnalysisCheckpoint, AnalysisExecution
@@ -48,6 +48,26 @@ class AnalysisExecutionRepository(BaseRepository[AnalysisExecution]):
             .limit(limit)
         )
         return result.scalars().all()
+
+    async def count_by_status(self, status: str) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(AnalysisExecution)
+            .where(AnalysisExecution.status == status)
+        )
+        return result.scalar_one()
+
+    async def count_active_leases(self, now: datetime) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(AnalysisExecution)
+            .where(
+                AnalysisExecution.lease_owner.is_not(None),
+                AnalysisExecution.lease_expires_at.is_not(None),
+                AnalysisExecution.lease_expires_at > now,
+            )
+        )
+        return result.scalar_one()
 
     async def acquire_lease(
         self,

@@ -2,12 +2,12 @@
 Repository base class implementing generic CRUD operations.
 """
 
-from typing import TypeVar, Generic, Type, Optional, Sequence, Any
+from typing import TypeVar, Generic, Type, Optional, Sequence, Any, cast
 from sqlalchemy import select, func, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from web_api.db.database import Base
 
-T = TypeVar("T", bound=Base)
+T = TypeVar("T")
 
 
 class BaseRepository(Generic[T]):
@@ -26,7 +26,7 @@ class BaseRepository(Generic[T]):
 
     async def get_by_id(self, id: int) -> Optional[T]:
         result = await self.session.execute(
-            select(self.model).where(self.model.id == id)
+            select(self.model).where(cast(Any, self.model).id == id)
         )
         return result.scalar_one_or_none()
 
@@ -48,6 +48,6 @@ class BaseRepository(Generic[T]):
 
     async def delete(self, id: int) -> bool:
         result = await self.session.execute(
-            delete(self.model).where(self.model.id == id)
+            delete(self.model).where(cast(Any, self.model).id == id)
         )
-        return result.rowcount > 0
+        return cast(int, getattr(cast(Any, result), "rowcount", 0)) > 0
