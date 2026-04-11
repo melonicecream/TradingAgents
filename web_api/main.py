@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.summary_report import generate_summary_report
 from web_api.db.database import DATABASE_URL, bootstrap_checkpointer, get_db, init_db
 from web_api.db.models import AnalysisExecution
 from web_api.repositories.analysis import AnalysisHistoryRepository
@@ -42,11 +43,35 @@ from web_api.services.execution_identity import (
     is_execution_compatible,
 )
 from web_api.schemas.analysis import (
+    EngineInfoResponse,
+    ExecutionDetailResponse,
+    AnalysisExecutionResponse,
     AnalysisHistoryCreate,
     AnalysisHistoryList,
     AnalysisHistoryResponse,
+    SystemStatsResponse,
+    PaginatedExecutionResponse,
     PaginatedResponse,
 )
+
+MILESTONE_LABELS = {
+    "market_complete": "시장 분석",
+    "social_complete": "소셜 미디어 분석",
+    "news_complete": "뉴스 분석",
+    "fundamentals_complete": "펀더멘털 분석",
+    "research_complete": "리서치 토론",
+    "trader_complete": "트레이더 분석",
+    "risk_complete": "리스크 토론",
+    "portfolio_complete": "포트폴리오 결정",
+}
+
+STATUS_LABELS = {
+    STATUS_PENDING: "대기 중",
+    STATUS_RUNNING: "분석 중",
+    STATUS_RESUMABLE: "재개 가능",
+    STATUS_FAILED_TERMINAL: "실패",
+    STATUS_COMPLETED: "완료",
+}
 
 
 def build_web_graph_runtime_args(thread_id: str) -> Dict[str, Any]:
@@ -194,9 +219,7 @@ class TradingService:
                     )
 
                 current_step += 1
-                progress_data = self._extract_progress(
-                    chunk, prev_chunk, agent_status, current_step, total_steps
-                )
+                prev_chunk_for_progress = prev_chunk.copy()
                 prev_chunk = chunk.copy()
                 final_result = chunk
 
@@ -209,6 +232,16 @@ class TradingService:
                     db=db,
                     execution_repo=execution_repo,
                     checkpoint_repo=checkpoint_repo,
+                )
+                await db.refresh(execution)
+                progress_data = self._extract_progress(
+                    execution,
+                    chunk,
+                    prev_chunk_for_progress,
+                    agent_status,
+                    current_step,
+                    total_steps,
+                    normalized_analysts,
                 )
 
                 yield f"data: {json.dumps(progress_data, ensure_ascii=False)}\n\n"
@@ -511,6 +544,16 @@ class TradingService:
         execution_repo: AnalysisExecutionRepository,
     ) -> Dict[str, Any]:
         analysis_history_id = cast(Optional[int], execution.analysis_history_id)
+        summary_report = None
+        language = cast(str, self.config.get("language", "English"))
+        if language != "English":
+            try:
+                graph = self.get_graph(cast(List[str], execution.analysts_json))
+                summary_report = generate_summary_report(
+                    chunk, language, graph.deep_thinking_llm
+                )
+            except Exception:
+                summary_report = None
         if analysis_history_id is None:
             full_decision = chunk.get("final_trade_decision", "")
             simple_decision = self._parse_decision_rating(full_decision)
@@ -534,6 +577,7 @@ class TradingService:
                     "bear_history": chunk.get("investment_debate_state", {}).get(
                         "bear_history", ""
                     ),
+                    "summary_report": summary_report,
                 },
                 risk={
                     "aggressive": chunk.get("risk_debate_state", {}).get(
@@ -566,6 +610,7 @@ class TradingService:
         await db.refresh(execution)
         return {
             **self._extract_final_result(chunk),
+            "summary_report": summary_report,
             "execution_id": cast(int, execution.id),
             "status": STATUS_COMPLETED,
             "last_completed_milestone": cast(
@@ -600,7 +645,14 @@ class TradingService:
         )
 
     def _extract_progress(
-        self, chunk: Dict, prev_chunk: Dict, agent_status: Dict, step: int, total: int
+        self,
+        execution: AnalysisExecution,
+        chunk: Dict,
+        prev_chunk: Dict,
+        agent_status: Dict,
+        step: int,
+        total: int,
+        selected_analysts: List[str],
     ) -> Dict:
         """Extract progress by comparing chunks."""
         current_agent = None
@@ -680,13 +732,43 @@ class TradingService:
             if chunk.get(key):
                 reports[key] = "completed"
 
+        milestone_sequence = self._build_milestone_sequence(selected_analysts)
+        completed_milestones = {
+            milestone
+            for milestone, _summary in self._derive_milestones(chunk, selected_analysts)
+        }
+        completed_count = len(completed_milestones)
+        total_milestones = len(milestone_sequence)
+        current_stage = self._get_current_stage_name(
+            milestone_sequence,
+            completed_milestones,
+            bool(chunk.get("final_trade_decision")),
+        )
+        milestone_status = {
+            self._milestone_label(milestone): (
+                "completed" if milestone in completed_milestones else "pending"
+            )
+            for milestone in milestone_sequence
+        }
+        progress_fields = self._build_progress_fields(
+            execution,
+            selected_analysts,
+            is_final_chunk=bool(chunk.get("final_trade_decision")),
+            cap_incomplete_at_99=True,
+        )
+
         return {
             "type": "progress",
             "step": step,
             "total": total,
-            "progress": min(step / total * 100, 99),
+            "progress": progress_fields["progress"],
+            "elapsed_seconds": self._execution_elapsed_seconds(execution),
             "agent": current_agent,
+            "current_stage": progress_fields["current_stage"],
             "agent_status": agent_status,
+            "milestone_status": milestone_status,
+            "completed_milestones": completed_count,
+            "total_milestones": progress_fields["total_milestones"],
             "reports": reports,
             "timestamp": datetime.now().isoformat(),
         }
@@ -698,6 +780,7 @@ class TradingService:
         return {
             "type": "complete",
             "progress": 100,
+            "current_stage": self._milestone_label("portfolio_complete"),
             "decision": simple_decision,
             "full_decision": full_decision,
             "reports": {
@@ -731,6 +814,248 @@ class TradingService:
                 ),
             },
             "timestamp": datetime.now().isoformat(),
+        }
+
+    def _build_milestone_sequence(self, selected_analysts: List[str]) -> List[str]:
+        sequence = [f"{analyst}_complete" for analyst in selected_analysts]
+        sequence.extend(
+            [
+                "research_complete",
+                "trader_complete",
+                "risk_complete",
+                "portfolio_complete",
+            ]
+        )
+        return sequence
+
+    def _milestone_label(self, milestone: str) -> str:
+        return MILESTONE_LABELS.get(milestone, milestone)
+
+    def _status_label(self, status: str) -> str:
+        return STATUS_LABELS.get(status, status)
+
+    def _default_selected_analysts(self) -> List[str]:
+        return ["market", "social", "news", "fundamentals"]
+
+    def _fixed_agent_count(self) -> int:
+        return 8
+
+    def build_engine_info(self) -> EngineInfoResponse:
+        selected_analysts = self._default_selected_analysts()
+        return EngineInfoResponse(
+            provider=cast(str, self.config["llm_provider"]),
+            deep_model=cast(str, self.config["deep_think_llm"]),
+            quick_model=cast(str, self.config["quick_think_llm"]),
+            backend_url=cast(str, self.config.get("backend_url", "")),
+            language=cast(str, self.config.get("language", "English")),
+            selected_analyst_count=len(selected_analysts),
+            fixed_agent_count=self._fixed_agent_count(),
+            total_agent_count=len(selected_analysts) + self._fixed_agent_count(),
+            cli_total_agent_count=12,
+            agent_count_matches_cli=(len(selected_analysts) + self._fixed_agent_count())
+            == 12,
+            supports_korean_summary=cast(str, self.config.get("language", "English"))
+            != "English",
+            engine_explanation=(
+                "선택된 분석가들이 시장·소셜·뉴스·펀더멘털 보고서를 만들고, "
+                "리서치 토론과 트레이더·리스크 평가를 거쳐 포트폴리오 매니저가 최종 결정을 내리는 멀티 에이전트 엔진입니다."
+            ),
+        )
+
+    def _execution_elapsed_seconds(self, execution: AnalysisExecution) -> float:
+        created_at = cast(Optional[datetime], execution.created_at)
+        if created_at is None:
+            return 0.0
+        updated_at = cast(Optional[datetime], execution.updated_at) or datetime.now(
+            created_at.tzinfo
+        )
+        return max((updated_at - created_at).total_seconds(), 0.0)
+
+    def _get_current_stage_name(
+        self,
+        milestone_sequence: List[str],
+        completed_milestones: set[str],
+        is_final_chunk: bool,
+    ) -> str:
+        if is_final_chunk:
+            return self._milestone_label("portfolio_complete")
+
+        for milestone in milestone_sequence:
+            if milestone not in completed_milestones:
+                return self._milestone_label(milestone)
+        return self._milestone_label("portfolio_complete")
+
+    async def _build_execution_response(
+        self,
+        execution: AnalysisExecution,
+        history_repo: AnalysisHistoryRepository,
+    ) -> AnalysisExecutionResponse:
+        selected_analysts = cast(List[str], execution.analysts_json)
+        last_completed = cast(Optional[str], execution.last_completed_milestone)
+        execution_status = cast(str, execution.status)
+        progress_fields = self._build_progress_fields(
+            execution,
+            selected_analysts,
+            is_final_chunk=execution_status == STATUS_COMPLETED,
+            cap_incomplete_at_99=False,
+        )
+
+        decision = None
+        analysis_history_id = cast(Optional[int], execution.analysis_history_id)
+        if analysis_history_id is not None:
+            history = await history_repo.get_by_id(analysis_history_id)
+            if history is not None:
+                decision = cast(str, history.decision)
+
+        return AnalysisExecutionResponse(
+            id=cast(int, execution.id),
+            ticker=cast(str, execution.ticker),
+            analysis_date=cast(str, execution.analysis_date),
+            status=self._status_label(execution_status),
+            progress=progress_fields["progress"],
+            current_stage=progress_fields["current_stage"],
+            last_completed_milestone=last_completed,
+            current_milestone=cast(Optional[str], execution.current_milestone),
+            retry_count=cast(int, execution.retry_count or 0),
+            resume_count=cast(int, execution.resume_count or 0),
+            decision=decision,
+            created_at=cast(datetime, execution.created_at),
+        )
+
+    async def _generate_summary_report_for_history(
+        self,
+        execution: AnalysisExecution,
+        history: Any | None,
+    ) -> Optional[str]:
+        language = cast(str, self.config.get("language", "English"))
+        if language == "English" or history is None:
+            return None
+
+        research = cast(Optional[Dict[str, Any]], getattr(history, "research", None))
+        if isinstance(research, dict) and research.get("summary_report"):
+            return cast(str, research.get("summary_report"))
+
+        try:
+            graph = self.get_graph(cast(List[str], execution.analysts_json))
+            summary_state = {
+                "market_report": (
+                    cast(Optional[Dict[str, Any]], getattr(history, "reports", None))
+                    or {}
+                ).get("market", ""),
+                "sentiment_report": (
+                    cast(Optional[Dict[str, Any]], getattr(history, "reports", None))
+                    or {}
+                ).get("sentiment", ""),
+                "news_report": (
+                    cast(Optional[Dict[str, Any]], getattr(history, "reports", None))
+                    or {}
+                ).get("news", ""),
+                "fundamentals_report": (
+                    cast(Optional[Dict[str, Any]], getattr(history, "reports", None))
+                    or {}
+                ).get("fundamentals", ""),
+                "investment_plan": (research or {}).get("investment_plan", ""),
+                "trader_investment_plan": (research or {}).get("trader_plan", ""),
+                "final_trade_decision": cast(
+                    Optional[str], getattr(history, "full_decision", None)
+                )
+                or "",
+            }
+            return generate_summary_report(
+                summary_state, language, graph.deep_thinking_llm
+            )
+        except Exception:
+            return None
+
+    async def _build_execution_detail_response(
+        self,
+        execution: AnalysisExecution,
+        history_repo: AnalysisHistoryRepository,
+        checkpoint_repo: AnalysisCheckpointRepository,
+    ) -> ExecutionDetailResponse:
+        base = await self._build_execution_response(execution, history_repo)
+        history = None
+        analysis_history_id = cast(Optional[int], execution.analysis_history_id)
+        if analysis_history_id is not None:
+            history = await history_repo.get_by_id(analysis_history_id)
+
+        summary_report = await self._generate_summary_report_for_history(
+            execution, history
+        )
+        workflow_steps = await self._build_execution_step_timings(
+            execution, checkpoint_repo
+        )
+        return ExecutionDetailResponse(
+            **base.model_dump(),
+            analysts=cast(List[str], execution.analysts_json),
+            reports=cast(Optional[Dict[str, Any]], getattr(history, "reports", None)),
+            research=cast(Optional[Dict[str, Any]], getattr(history, "research", None)),
+            risk=cast(Optional[Dict[str, Any]], getattr(history, "risk", None)),
+            summary_report=summary_report,
+            started_at=cast(datetime, execution.created_at),
+            updated_at=cast(Optional[datetime], execution.updated_at),
+            elapsed_seconds=self._execution_elapsed_seconds(execution),
+            workflow_steps=cast(List[Any], workflow_steps),
+        )
+
+    async def _build_execution_step_timings(
+        self,
+        execution: AnalysisExecution,
+        checkpoint_repo: AnalysisCheckpointRepository,
+    ) -> List[Dict[str, Any]]:
+        checkpoints = await checkpoint_repo.get_by_execution_id(cast(int, execution.id))
+        previous_time = cast(datetime, execution.created_at)
+        steps: List[Dict[str, Any]] = []
+
+        for checkpoint in checkpoints:
+            completed_at = cast(datetime, checkpoint.created_at)
+            steps.append(
+                {
+                    "milestone": cast(str, checkpoint.milestone),
+                    "label": self._milestone_label(cast(str, checkpoint.milestone)),
+                    "completed_at": completed_at,
+                    "elapsed_seconds": max(
+                        (completed_at - previous_time).total_seconds(),
+                        0.0,
+                    ),
+                }
+            )
+            previous_time = completed_at
+
+        return steps
+
+    def _build_progress_fields(
+        self,
+        execution: AnalysisExecution,
+        selected_analysts: List[str],
+        *,
+        is_final_chunk: bool,
+        cap_incomplete_at_99: bool,
+    ) -> Dict[str, Any]:
+        milestone_sequence = self._build_milestone_sequence(selected_analysts)
+        completed_count = 0
+        last_completed = cast(Optional[str], execution.last_completed_milestone)
+        if last_completed in milestone_sequence:
+            completed_count = milestone_sequence.index(last_completed) + 1
+
+        total_milestones = len(milestone_sequence)
+        progress = (completed_count / total_milestones * 100) if total_milestones else 0
+        execution_status = cast(str, execution.status)
+        if execution_status == STATUS_COMPLETED:
+            progress = 100
+        elif is_final_chunk and cap_incomplete_at_99:
+            progress = 99
+
+        current_stage = self._get_current_stage_name(
+            milestone_sequence,
+            set(milestone_sequence[:completed_count]),
+            execution_status == STATUS_COMPLETED or is_final_chunk,
+        )
+
+        return {
+            "progress": progress,
+            "current_stage": current_stage,
+            "total_milestones": total_milestones,
         }
 
     def _parse_decision_rating(self, full_decision: str) -> str:
@@ -843,6 +1168,27 @@ async def health_check():
     }
 
 
+@app.get("/engine", response_model=EngineInfoResponse)
+async def get_engine_info():
+    return trading_service.build_engine_info()
+
+
+@app.get("/stats", response_model=SystemStatsResponse)
+async def get_system_stats(db: AsyncSession = Depends(get_db)):
+    execution_repo = AnalysisExecutionRepository(db)
+    now = datetime.now()
+    running_executions = await execution_repo.count_by_status(STATUS_RUNNING)
+    return SystemStatsResponse(
+        concurrent_runs=running_executions,
+        running_executions=running_executions,
+        resumable_executions=await execution_repo.count_by_status(STATUS_RESUMABLE),
+        failed_executions=await execution_repo.count_by_status(STATUS_FAILED_TERMINAL),
+        completed_executions=await execution_repo.count_by_status(STATUS_COMPLETED),
+        total_executions=await execution_repo.count(),
+        active_leases=await execution_repo.count_active_leases(now),
+    )
+
+
 @app.get("/analyze/{ticker}")
 async def analyze_stock(
     request: Request,
@@ -907,6 +1253,54 @@ async def get_history(
         page=page,
         page_size=page_size,
         pages=pages,
+    )
+
+
+@app.get("/executions", response_model=PaginatedExecutionResponse)
+async def get_executions(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get recent analysis executions with live status."""
+    execution_repo = AnalysisExecutionRepository(db)
+    history_repo = AnalysisHistoryRepository(db)
+    skip = (page - 1) * page_size
+
+    executions = await execution_repo.get_all(
+        skip=skip,
+        limit=page_size,
+        order_by=execution_repo.model.created_at.desc(),
+    )
+    items = [
+        await trading_service._build_execution_response(execution, history_repo)
+        for execution in executions
+    ]
+    total = await execution_repo.count()
+    pages = (total + page_size - 1) // page_size
+
+    return PaginatedExecutionResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        pages=pages,
+    )
+
+
+@app.get("/executions/{execution_id}", response_model=ExecutionDetailResponse)
+async def get_execution_detail(
+    execution_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    execution_repo = AnalysisExecutionRepository(db)
+    history_repo = AnalysisHistoryRepository(db)
+    checkpoint_repo = AnalysisCheckpointRepository(db)
+    execution = await execution_repo.get_by_id(execution_id)
+    if execution is None:
+        return {"error": "Execution not found"}
+    return await trading_service._build_execution_detail_response(
+        execution, history_repo, checkpoint_repo
     )
 
 
