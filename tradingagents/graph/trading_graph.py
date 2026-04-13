@@ -68,10 +68,12 @@ class TradingAgentsGraph:
         set_config(self.config)
 
         # Create necessary directories
-        os.makedirs(
+        data_cache_dir = self.config.get(
+            "data_cache_dir",
             os.path.join(self.config["project_dir"], "dataflows/data_cache"),
-            exist_ok=True,
         )
+        self.config["data_cache_dir"] = data_cache_dir
+        os.makedirs(data_cache_dir, exist_ok=True)
 
         # Initialize LLMs with provider-specific thinking configuration
         llm_kwargs = self._get_provider_kwargs()
