@@ -10,6 +10,7 @@ services:
     environment:
       - TRADINGAGENTS_LANGUAGE=한국어
       - TRADINGAGENTS_RESULTS_DIR=/app/results
+      - TRADINGAGENTS_DATA_CACHE_DIR=/app/data/cache
     volumes:
       - ./results:/app/results
       - ./eval_results:/app/eval_results
@@ -28,13 +29,34 @@ services:
       dockerfile: Dockerfile
       args:
         - NEXT_PUBLIC_API_URL=${API_URL:-http://localhost:8000}
-    ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+    labels:
+      - dev.orbstack.http-port=3000
     depends_on:
       api:
         condition: service_healthy
     networks:
       - tradingagents-network
+
+  telegram:
+    build:
+      context: .
+      dockerfile: telegram_bot/Dockerfile
+    env_file:
+      - .env.zen
+    environment:
+      - TRADINGAGENTS_LANGUAGE=한국어
+      - TRADINGAGENTS_RESULTS_DIR=/app/results
+      - TRADINGAGENTS_DATA_CACHE_DIR=/app/data/cache
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ./results:/app/results
+      - ./eval_results:/app/eval_results
+      - ./data:/app/data
+    networks:
+      - tradingagents-network
+    restart: unless-stopped
 
 networks:
   tradingagents-network:

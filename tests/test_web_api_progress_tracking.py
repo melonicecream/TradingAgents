@@ -159,7 +159,7 @@ class WebApiExecutionEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_engine_info_matches_web_runtime_defaults(self):
         response = await get_engine_info()
 
-        self.assertEqual(response.provider, DEFAULT_CONFIG["llm_provider"])
+        self.assertEqual(response.provider, "OpenAI")
         self.assertEqual(response.deep_model, DEFAULT_CONFIG["deep_think_llm"])
         self.assertEqual(response.quick_model, DEFAULT_CONFIG["quick_think_llm"])
         self.assertEqual(response.language, "한국어")
@@ -168,6 +168,14 @@ class WebApiExecutionEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response.agent_count_matches_cli)
         self.assertTrue(response.supports_korean_summary)
         self.assertIn("포트폴리오 매니저", response.engine_explanation)
+
+    def test_engine_info_provider_prefers_backend_url_vendor_label(self):
+        service = TradingService()
+        service.config = {**DEFAULT_CONFIG, "backend_url": "https://opencode.ai/zen/v1"}
+
+        response = service.build_engine_info()
+
+        self.assertEqual(response.provider, "OpenCode")
 
     async def test_system_stats_counts_execution_statuses(self):
         async with self.session_factory() as session:
