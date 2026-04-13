@@ -28,6 +28,7 @@ dependencies = [
     "typer>=0.21.0",
     "setuptools>=80.9.0",
     "stockstats>=0.6.5",
+    "python-telegram-bot>=21.10",
     "tqdm>=4.67.1",
     "typing-extensions>=4.14.0",
     "yfinance>=0.2.63",
@@ -35,9 +36,10 @@ dependencies = [
 
 [project.scripts]
 tradingagents = "cli.main:app"
+tradingagents-telegram = "telegram_bot.main:main"
 
 [tool.setuptools.packages.find]
-include = ["tradingagents*", "cli*"]
+include = ["tradingagents*", "cli*", "web_api*", "telegram_bot*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
