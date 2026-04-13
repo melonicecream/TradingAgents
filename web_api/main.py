@@ -10,6 +10,7 @@ import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 from uuid import uuid4
 from typing import Any, AsyncGenerator, Dict, List, Optional, cast
 
@@ -840,10 +841,31 @@ class TradingService:
     def _fixed_agent_count(self) -> int:
         return 8
 
+    def _provider_label(self) -> str:
+        backend_url = cast(str, self.config.get("backend_url", "")).strip()
+        if backend_url:
+            host = (urlparse(backend_url).hostname or "").lower()
+            provider_map = {
+                "api.openai.com": "OpenAI",
+                "api.anthropic.com": "Anthropic",
+                "generativelanguage.googleapis.com": "Google",
+                "openrouter.ai": "OpenRouter",
+                "api.x.ai": "xAI",
+                "opencode.ai": "OpenCode",
+                "localhost": "Local",
+                "127.0.0.1": "Local",
+            }
+            if host in provider_map:
+                return provider_map[host]
+            if host:
+                return host
+
+        return cast(str, self.config["llm_provider"]).title()
+
     def build_engine_info(self) -> EngineInfoResponse:
         selected_analysts = self._default_selected_analysts()
         return EngineInfoResponse(
-            provider=cast(str, self.config["llm_provider"]),
+            provider=self._provider_label(),
             deep_model=cast(str, self.config["deep_think_llm"]),
             quick_model=cast(str, self.config["quick_think_llm"]),
             backend_url=cast(str, self.config.get("backend_url", "")),
